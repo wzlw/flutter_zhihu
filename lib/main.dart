@@ -38,26 +38,46 @@ class _MyHomePageState extends State<MyHomePage> {
   int _current = 0;
   ScrollController _controller = ScrollController();
   List<BaseModel> _list = [];
+  bool isLoadding = false;
+
+  @override
+  void initState() {
+    fetchPost();
+    super.initState();
+    _controller.addListener(() {
+      if (_controller.position.pixels >= _controller.position.maxScrollExtent) {
+        _loadMore();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    _controller.addListener(() {
-      if (_controller.position.pixels >= _controller.position.maxScrollExtent - 100) {
-        }
-    });
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.title),
       ),
       body: Center(
-        child: buildFutureBuilder()
+        child: _list.length == 0 ? CircularProgressIndicator() :
+        RefreshIndicator(
+          onRefresh: () {
+            return fetchPost();
+          },
+          child: _buildListView(),
+        )
       ),
     );
   }
 
   FutureBuilder<List<BaseModel>> buildFutureBuilder() {
      return FutureBuilder<List<BaseModel>>(
-        future: fetchPost(),
+//        future: fetchPost(),
         builder: (context, snapshot) {
           if (snapshot.hasData) {
             return RefreshIndicator(
@@ -65,7 +85,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 print('refresh');
                 return;
               },
-              child: _buildListView(snapshot.data),
+              child: _buildListView(),
             );
           } else if (snapshot.hasError) {
             return Text("${snapshot.error}");
@@ -75,17 +95,28 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
-  ListView _buildListView(List<BaseModel> list) {
+  ListView _buildListView() {
     return ListView.builder(
         controller: _controller,
-        itemCount: list.length + 1,
+        itemCount: _list.length + 2,
         itemBuilder: (context, index) {
             if (index == 0) {
-              Post post = list[index] as Post;
+              Post post = _list[index] as Post;
               return header(post.topStories);
             }
             int tIndex = index - 1;
-            var time = DateTime.parse(list[tIndex].date);
+            if (index == _list.length + 1) {
+              return Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: new Center(
+                  child: new Opacity(
+                    opacity: isLoadding ? 1.0 : 0.0,
+                    child: new CircularProgressIndicator(),
+                  ),
+                ),
+              );
+            }
+            var time = DateTime.parse(_list[tIndex].date);
             var now = DateTime.now();
             bool isToday = false;
             if (time.year == now.year && time.month == now.month && time.day == now.day) {
@@ -95,14 +126,14 @@ class _MyHomePageState extends State<MyHomePage> {
             return CustomizeExpansionTile(
               title: Text(isToday ? '今日热闻' : '${time.month}月${time.day}日 星期${week[time.weekday]}', style: TextStyle(fontSize: 16.0, color: Colors.black45),),
               initiallyExpanded: true,
-              children: map<Widget>(list[tIndex].stories, (i, item) {
+              children: map<Widget>(_list[tIndex].stories, (i, item) {
                 return Card(
                   child: ListTile(
                     contentPadding: EdgeInsets.fromLTRB(5.0,10.0,5.0,10.0),
-                    title: Text("${list[tIndex].stories[i].title}"),
-                    trailing: Image.network("${list[tIndex].stories[i].images[0]}", width: 80.0, height: 60.0, alignment: Alignment.centerRight, fit: BoxFit.cover,),
+                    title: Text("${_list[tIndex].stories[i].title}"),
+                    trailing: Image.network("${_list[tIndex].stories[i].images[0]}", width: 80.0, height: 60.0, alignment: Alignment.centerRight, fit: BoxFit.cover,),
                     onTap: () {
-                      skipDetail(list[tIndex].stories[i].id);
+                      skipDetail(_list[tIndex].stories[i].id);
                     },
                   ),
                 );
@@ -112,20 +143,88 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<List<BaseModel>> fetchPost() async {
+    _list.clear();
     Dio dio = new Dio();
     final Response response = await dio.get('https://news-at.zhihu.com/api/4/news/latest');
     Post post = Post.fromJson(response.data);
     List<BaseModel> list = List();
     list.add(post);
-//    _list.add(post);
-//    var now = DateTime.now();
-//    String date = '${now.year}${now.month > 10 ? now.month : '0' + now.month.toString()}${_list.length == 1 ? now.day : now.day}';
-//    final Response beforeResponse = await dio.get('https://news-at.zhihu.com/api/4/news/before/${date}');
-//    _list.add(BaseModel.fromJson(beforeResponse.data));
+    var now = DateTime.now();
+    String date = '${now.year}${now.month > 10 ? now.month : '0' + now.month.toString()}${now.day}';
+    final Response beforeResponse = await dio.get('https://news-at.zhihu.com/api/4/news/before/${date}');
+    list.add(BaseModel.fromJson(beforeResponse.data));
+    setState(() {
+      _list.addAll(list);
+    });
     return list;
   }
 
+   _loadMore() async {
+    if (isLoadding) {
+      return;
+    }
+    setState(() {
+      isLoadding = true;
+    });
+    Dio dio = new Dio();
+    var now = DateTime.now();
+    int month = now.month;
+    int day = now.day;
+    day -= (_list.length - 1);
+    if (day == 0) {
+      month = month - 1;
+      day = getLen(now.year, month);
+    } else if (day < 0) {
+      month -= 1;
+      day += getLen(now.year, month);
+    }
+    String date = "${now.year}${month > 10 ? month : '0' + month.toString()}${day >= 10 ? day : '0' + day.toString()}";
+    try {
+      String url = 'https://news-at.zhihu.com/api/4/news/before/' + date;
+      final Response beforeResponse = await dio.get(url);
+      setState(() {
+        _list.add(BaseModel.fromJson(beforeResponse.data));
+        isLoadding = false;
+      });
+    } catch (er){
+    }
+  }
 
+  // 判断是否是润年
+  bool isLeap(int year) {
+    if (year % 4 == 0 && year % 100 > 0) {
+      return true;
+    } else if (year % 400 == 0 && year % 3200 > 0) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  // 获取月份最大日期
+  int getLen(int year, int month) {
+    if (month == 2) {
+      if (isLeap(year)) {
+        return 29;
+      } else {
+        return 28;
+      }
+    } else {
+      if (month < 8) {
+        if (month % 2 > 0) {
+          return 31;
+        } else {
+          return 30;
+        }
+      } else {
+        if (month % 2 > 0) {
+          return 30;
+        } else {
+          return 31;
+        }
+      }
+    }
+  }
 
   List<T> map<T>(List list, Function handler) {
     List<T> result = [];
